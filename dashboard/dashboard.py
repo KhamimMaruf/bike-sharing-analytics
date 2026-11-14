@@ -1,198 +1,225 @@
-import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import streamlit as st
 
-# Konfigurasi halaman dashboard
+# Konfigurasi halaman
 st.set_page_config(
-    page_title="Bike Sharing Analytics Dashboard",
+    page_title="Bike Sharing Dashboard",
     page_icon="🚲",
     layout="wide"
 )
 
-sns.set_style("whitegrid")
+sns.set_theme(style="whitegrid")
 
+# Load data bersih
 @st.cache_data
 def load_data():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    day = pd.read_csv(os.path.join(base_dir, "main_day_data.csv"))
-    hour = pd.read_csv(os.path.join(base_dir, "main_hour_data.csv"))
-    day['date'] = pd.to_datetime(day['date'])
-    hour['date'] = pd.to_datetime(hour['date'])
-    return day, hour
+    day_df = pd.read_csv("dashboard/day_clean.csv")
+    hour_df = pd.read_csv("dashboard/hour_clean.csv")
+    day_df["dteday"] = pd.to_datetime(day_df["dteday"])
+    hour_df["dteday"] = pd.to_datetime(hour_df["dteday"])
+    return day_df, hour_df
 
 day_df, hour_df = load_data()
 
-# --- SIDEBAR FILTER ---
-st.sidebar.header("🚲 Filter Dashboard")
+# --- SIDEBAR (FILTER INTERAKTIF) ---
+with st.sidebar:
+    st.title("🚲 Bike Sharing Analytics")
+    st.markdown("Filter data untuk mengeksplorasi pola penyewaan sepeda.")
+    
+    min_date = day_df["dteday"].min().date()
+    max_date = day_df["dteday"].max().date()
+    
+    date_range = st.date_input(
+        label="Rentang Tanggal",
+        min_value=min_date,
+        max_value=max_date,
+        value=[min_date, max_date]
+    )
+    
+    # Filter musim menggunakan season_label
+    all_seasons = ["Spring", "Summer", "Fall", "Winter"]
+    selected_seasons = st.multiselect(
+        label="Pilih Musim",
+        options=all_seasons,
+        default=all_seasons
+    )
 
-min_date = day_df['date'].min().date()
-max_date = day_df['date'].max().date()
-
-date_range = st.sidebar.date_input(
-    label="Rentang Tanggal",
-    min_value=min_date,
-    max_value=max_date,
-    value=[min_date, max_date]
-)
-
+# Terapkan filter tanggal & musim
 if len(date_range) == 2:
-    start_date, end_date = date_range
+    start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
 else:
-    start_date, end_date = min_date, max_date
+    start_date, end_date = pd.to_datetime(min_date), pd.to_datetime(max_date)
 
-selected_seasons = st.sidebar.multiselect(
-    label="Pilih Musim (Season)",
-    options=['Spring', 'Summer', 'Fall', 'Winter'],
-    default=['Spring', 'Summer', 'Fall', 'Winter']
-)
-
-# Terapkan filter pada dataframe
-filtered_day_df = day_df[
-    (day_df['date'].dt.date >= start_date) &
-    (day_df['date'].dt.date <= end_date) &
-    (day_df['season'].isin(selected_seasons))
+filtered_day = day_df[
+    (day_df["dteday"] >= start_date) & 
+    (day_df["dteday"] <= end_date) & 
+    (day_df["season_label"].isin(selected_seasons))
 ]
 
-filtered_hour_df = hour_df[
-    (hour_df['date'].dt.date >= start_date) &
-    (hour_df['date'].dt.date <= end_date) &
-    (hour_df['season'].isin(selected_seasons))
+filtered_hour = hour_df[
+    (hour_df["dteday"] >= start_date) & 
+    (hour_df["dteday"] <= end_date) & 
+    (hour_df["season_label"].isin(selected_seasons))
 ]
 
-# --- HEADER & KPI METRICS ---
-st.title("🚲 Bike Sharing Performance & Operational Dashboard")
-st.markdown("Analisis pola penyewaan sepeda berdasarkan musim, kondisi cuaca, dan klaster waktu operasional (2011–2012).")
+# --- HEADER & METRIK UTAMA ---
+st.title("📊 Dashboard Analisis Penyewaan Sepeda (2011–2012)")
+st.markdown(f"Menampilkan data dari **{start_date.strftime('%d %b %Y')}** hingga **{end_date.strftime('%d %b %Y')}**")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 with col1:
-    total_rentals = int(filtered_day_df['total_count'].sum())
+    total_rentals = int(filtered_day["cnt"].sum())
     st.metric("Total Penyewaan", f"{total_rentals:,}")
 with col2:
-    avg_daily = round(filtered_day_df['total_count'].mean(), 1) if not filtered_day_df.empty else 0
-    st.metric("Rata-rata Harian", f"{avg_daily:,}")
+    total_registered = int(filtered_day["registered"].sum())
+    st.metric("Total Pengguna Registered", f"{total_registered:,}")
 with col3:
-    total_registered = int(filtered_day_df['registered'].sum())
-    st.metric("Pengguna Registered", f"{total_registered:,}")
-with col4:
-    total_casual = int(filtered_day_df['casual'].sum())
-    st.metric("Pengguna Casual", f"{total_casual:,}")
+    total_casual = int(filtered_day["casual"].sum())
+    st.metric("Total Pengguna Casual", f"{total_casual:,}")
 
 st.divider()
 
-# --- VISUALISASI 1: MUSIM & CUACA ---
-st.subheader("1. Pengaruh Musim dan Kondisi Cuaca terhadap Penyewaan")
+# --- PERTANYAAN 1: PENGARUH MUSIM & CUACA ---
+st.subheader("1. Pengaruh Musim dan Kondisi Cuaca terhadap Rata-rata Penyewaan")
 
-if filtered_day_df.empty:
-    st.warning("Tidak ada data untuk kombinasi filter yang dipilih.")
-else:
-    fig1, axes1 = plt.subplots(1, 2, figsize=(16, 5.5))
+col_q1_a, col_q1_b = st.columns(2)
 
-    season_order = ['Spring', 'Summer', 'Fall', 'Winter']
-    season_melt = filtered_day_df.melt(
-        id_vars='season',
-        value_vars=['casual', 'registered'],
-        var_name='user_type',
-        value_name='avg_rentals'
+with col_q1_a:
+    season_order = ["Spring", "Summer", "Fall", "Winter"]
+    season_avg = filtered_day.groupby("season_label", as_index=False)["cnt"].mean()
+    season_avg["season_label"] = pd.Categorical(
+        season_avg["season_label"],
+        categories=season_order,
+        ordered=True
     )
-    sns.barplot(
-        data=season_melt,
-        x='season',
-        y='avg_rentals',
-        hue='user_type',
-        order=[s for s in season_order if s in selected_seasons],
-        palette=['#66b3ff', '#1f77b4'],
-        errorbar=None,
-        ax=axes1[0]
+    season_avg = season_avg.sort_values("season_label").dropna()
+    season_avg["season_label"] = season_avg["season_label"].astype(str)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    colors_season = ["#2B5C8F" if s == "Fall" else "#D3D3D3" for s in season_avg["season_label"]]
+    bars = sns.barplot(
+        data=season_avg,
+        x="season_label",
+        y="cnt",
+        hue="season_label",
+        palette=colors_season,
+        legend=False,
+        ax=ax
     )
-    axes1[0].set_title("Rata-rata Penyewaan Harian per Musim", fontsize=12, fontweight='bold')
-    axes1[0].set_xlabel("Musim")
-    axes1[0].set_ylabel("Rata-rata Penyewaan")
-    axes1[0].legend(title="Tipe Pengguna", labels=["Casual", "Registered"])
-    for container in axes1[0].containers:
-        axes1[0].bar_label(container, fmt='%.0f', padding=3, fontsize=9)
+    ax.set_title("Rata-rata Penyewaan Harian per Musim", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Musim")
+    ax.set_ylabel("Rata-rata Penyewaan (Unit)")
+    if bars.containers:
+        ax.bar_label(bars.containers[0], fmt="%.0f", padding=3)
+    st.pyplot(fig)
 
-    weather_order = ['Clear / Partly Cloudy', 'Mist / Cloudy', 'Light Snow / Rain']
-    weather_melt = filtered_day_df.melt(
-        id_vars='weather_condition',
-        value_vars=['casual', 'registered'],
-        var_name='user_type',
-        value_name='avg_rentals'
-    )
-    sns.barplot(
-        data=weather_melt,
-        x='weather_condition',
-        y='avg_rentals',
-        hue='user_type',
-        order=weather_order,
-        palette=['#66b3ff', '#1f77b4'],
-        errorbar=None,
-        ax=axes1[1]
-    )
-    axes1[1].set_title("Rata-rata Penyewaan Harian per Kondisi Cuaca", fontsize=12, fontweight='bold')
-    axes1[1].set_xlabel("Kondisi Cuaca")
-    axes1[1].set_ylabel("Rata-rata Penyewaan")
-    axes1[1].legend(title="Tipe Pengguna", labels=["Casual", "Registered"])
-    for container in axes1[1].containers:
-        axes1[1].bar_label(container, fmt='%.0f', padding=3, fontsize=9)
-
-    plt.tight_layout()
-    st.pyplot(fig1)
-
-st.divider()
-
-# --- VISUALISASI 2: POLA JAM & CLUSTERING PERIODE WAKTU ---
-st.subheader("2. Pola Jam Sibuk & Klaster Periode Waktu (Hari Kerja vs Akhir Pekan)")
-
-if filtered_hour_df.empty:
-    st.warning("Tidak ada data per jam untuk filter yang dipilih.")
-else:
-    fig2, axes2 = plt.subplots(1, 2, figsize=(16, 5.5))
-
-    sns.lineplot(
-        data=filtered_hour_df,
-        x='hour',
-        y='total_count',
-        hue='workingday_label',
-        palette=['#ff7f0e', '#1f77b4'],
-        marker='o',
-        linewidth=2.2,
-        errorbar=None,
-        ax=axes2[0]
-    )
-    axes2[0].set_title("Tren Penyewaan Sepeda 24 Jam", fontsize=12, fontweight='bold')
-    axes2[0].set_xlabel("Jam (00:00 - 23:00)")
-    axes2[0].set_ylabel("Rata-rata Penyewaan per Jam")
-    axes2[0].set_xticks(range(0, 24))
-    axes2[0].legend(title="Tipe Hari")
-
-    period_order = [
-        '1. Dini Hari (00-05)',
-        '2. Pagi / Komuter (06-10)',
-        '3. Siang (11-15)',
-        '4. Sore / Pulang Kerja (16-19)',
-        '5. Malam (20-23)'
+with col_q1_b:
+    weather_order = [
+        "Clear/Partly Cloudy",
+        "Mist/Cloudy",
+        "Light Snow/Rain",
+        "Heavy Rain/Ice"
     ]
-    sns.barplot(
-        data=filtered_hour_df,
-        x='time_period',
-        y='total_count',
-        hue='workingday_label',
-        order=period_order,
-        palette=['#ff7f0e', '#1f77b4'],
-        errorbar=None,
-        ax=axes2[1]
+    weather_avg = filtered_day.groupby("weather_condition", as_index=False)["cnt"].mean()
+    weather_avg["weather_condition"] = pd.Categorical(
+        weather_avg["weather_condition"],
+        categories=weather_order,
+        ordered=True
     )
-    axes2[1].set_title("Rata-rata Penyewaan per Klaster Periode Waktu", fontsize=12, fontweight='bold')
-    axes2[1].set_xlabel("Klaster Periode Waktu")
-    axes2[1].set_ylabel("Rata-rata Penyewaan per Jam")
-    axes2[1].tick_params(axis='x', rotation=15)
-    axes2[1].legend(title="Tipe Hari")
-    for container in axes2[1].containers:
-        axes2[1].bar_label(container, fmt='%.0f', padding=3, fontsize=9)
+    weather_avg = weather_avg.sort_values("weather_condition").dropna()
+    weather_avg["weather_condition"] = weather_avg["weather_condition"].astype(str)
 
-    plt.tight_layout()
-    st.pyplot(fig2)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    colors_weather = ["#2B5C8F" if w == "Clear/Partly Cloudy" else "#D3D3D3" for w in weather_avg["weather_condition"]]
+    bars = sns.barplot(
+        data=weather_avg,
+        x="weather_condition",
+        y="cnt",
+        hue="weather_condition",
+        palette=colors_weather,
+        legend=False,
+        ax=ax
+    )
+    ax.set_title("Rata-rata Penyewaan Harian per Kondisi Cuaca", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Kondisi Cuaca")
+    ax.set_ylabel("Rata-rata Penyewaan (Unit)")
+    plt.xticks(rotation=15)
+    if bars.containers:
+        ax.bar_label(bars.containers[0], fmt="%.0f", padding=3)
+    st.pyplot(fig)
 
-st.caption("Copyright © 2026 - Proyek Analisis Data Bike Sharing")
+st.divider()
+
+# --- PERTANYAAN 2: POLA JAM SIBUK (CASUAL VS REGISTERED) ---
+st.subheader("2. Pola Jam Sibuk Penyewaan: Hari Kerja vs Akhir Pekan/Libur")
+
+hourly_pattern = (
+    filtered_hour.groupby(["workingday_label", "hr"], as_index=False)[["casual", "registered"]]
+    .mean()
+)
+
+col_q2_a, col_q2_b = st.columns(2)
+
+with col_q2_a:
+    df_weekend = hourly_pattern[hourly_pattern["workingday_label"] == "Holiday/Weekend"]
+    fig, ax = plt.subplots(figsize=(7, 5))
+    sns.lineplot(
+        data=df_weekend,
+        x="hr",
+        y="registered",
+        label="Registered",
+        marker="o",
+        linewidth=2.5,
+        color="#2B5C8F",
+        ax=ax
+    )
+    sns.lineplot(
+        data=df_weekend,
+        x="hr",
+        y="casual",
+        label="Casual",
+        marker="s",
+        linewidth=2.5,
+        color="#E07A5F",
+        ax=ax
+    )
+    ax.set_title("Pola Jam Sibuk: Akhir Pekan & Hari Libur", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Jam (0–23)")
+    ax.set_ylabel("Rata-rata Penyewaan per Jam")
+    ax.set_xticks(range(0, 24, 2))
+    ax.legend()
+    st.pyplot(fig)
+
+with col_q2_b:
+    df_workday = hourly_pattern[hourly_pattern["workingday_label"] == "Working Day"]
+    fig, ax = plt.subplots(figsize=(7, 5))
+    sns.lineplot(
+        data=df_workday,
+        x="hr",
+        y="registered",
+        label="Registered",
+        marker="o",
+        linewidth=2.5,
+        color="#2B5C8F",
+        ax=ax
+    )
+    sns.lineplot(
+        data=df_workday,
+        x="hr",
+        y="casual",
+        label="Casual",
+        marker="s",
+        linewidth=2.5,
+        color="#E07A5F",
+        ax=ax
+    )
+    ax.set_title("Pola Jam Sibuk: Hari Kerja (Working Day)", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Jam (0–23)")
+    ax.set_ylabel("Rata-rata Penyewaan per Jam")
+    ax.set_xticks(range(0, 24, 2))
+    ax.legend()
+    st.pyplot(fig)
+
+st.caption("Sumber Data: Bike Sharing Dataset (2011–2012)")
